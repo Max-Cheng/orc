@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"compress/flate"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"io/ioutil"
 
-	"fmt"
-
 	"github.com/golang/snappy"
+	"github.com/klauspost/compress/zstd"
 )
 
 // CompressionCodec is an interface that provides methods for creating
@@ -149,7 +149,7 @@ func (c *CompressionZlibEncoder) Close() error {
 
 func (c *CompressionZlibEncoder) flush() error {
 	if c.w == nil {
-		//TODO: Check if this is correct
+		// TODO: Check if this is correct
 		return nil
 	}
 
@@ -167,7 +167,7 @@ func (c *CompressionZlibEncoder) flush() error {
 	}()
 
 	if c.compressedBuffer.Len() < c.rawBuffer.Len() {
-		//COMPRESSED
+		// COMPRESSED
 		header, err := compressionHeader(c.compressedBuffer.Len(), false)
 		if err != nil {
 			return err
@@ -191,7 +191,7 @@ func (c *CompressionZlibEncoder) flush() error {
 			return fmt.Errorf("Expected to write %d bytes, wrote %d", l, nCompressed)
 		}
 	} else {
-		//ORIGINAL
+		// ORIGINAL
 		header, err := compressionHeader(c.rawBuffer.Len(), true)
 		if err != nil {
 			return err
@@ -296,6 +296,65 @@ func (c *CompressionSnappyEncoder) Close() error {
 }
 
 func (c *CompressionSnappyEncoder) Flush() error {
+	return fmt.Errorf("Not implemented")
+}
+
+type CompressionZstd struct{}
+
+func (c CompressionZstd) Encoder(w io.Writer) io.WriteCloser {
+	return &CompressionZstdEncoder{destination: w}
+}
+
+func (c CompressionZstd) Decoder(r io.Reader) io.Reader {
+	return &CompressionZstdDecoder{source: r}
+}
+
+type CompressionZstdDecoder struct {
+	source      io.Reader
+	decoded     io.Reader
+	isOriginal  bool
+	chunkLength int
+	remaining   int64
+}
+
+func (c *CompressionZstdDecoder) readHeader() (int, error) {
+	header := make([]byte, 4, 4)
+	_, err := c.source.Read(header[:3])
+	if err != nil {
+		return 0, err
+	}
+	headerVal := binary.LittleEndian.Uint32(header)
+	c.isOriginal = headerVal%2 == 1
+	c.chunkLength = int(headerVal / 2)
+	if !c.isOriginal {
+		c.decoded, _ = zstd.NewReader(io.LimitReader(c.source, int64(c.chunkLength)))
+	} else {
+		c.decoded = io.LimitReader(c.source, int64(c.chunkLength))
+	}
+	return 0, nil
+}
+
+func (c *CompressionZstdDecoder) Read(p []byte) (int, error) {
+	if c.decoded == nil {
+		return c.readHeader()
+	}
+	n, err := c.decoded.Read(p)
+	if err == io.EOF {
+		c.decoded = nil
+		return n, nil
+	}
+	return n, err
+}
+
+type CompressionZstdEncoder struct {
+	destination io.Writer
+}
+
+func (c *CompressionZstdEncoder) Write(p []byte) (int, error) {
+	return 0, fmt.Errorf("Not implemented")
+}
+
+func (c *CompressionZstdEncoder) Close() error {
 	return fmt.Errorf("Not implemented")
 }
 
